@@ -53,10 +53,17 @@ app.use((error, req, res, next) => {
     res.status(status).json({ message: message, data: data });
 })
 
-mongoose.connect(
-    'mongodb+srv://miloti:YNgNLXIn0VLKzkUa@blog.hscf6.mongodb.net/'
-).then(result => {
-    console.log('Connected!')
-    app.listen(8080);
-})
-.catch(err => {console.log(err)});
+mongoose.connect('mongodb+srv://miloti:YNgNLXIn0VLKzkUa@blog.hscf6.mongodb.net/')
+  .then(result => {
+    const server = app.listen(8080, () => {
+      console.log('Server started on port 8080');
+    });
+    const io = require('./socket').init(server);
+    console.log('Socket.io initialized');  // Add this line for confirmation
+    io.on('connection', socket => {
+      console.log('Client connected');
+    });
+  })
+  .catch(err => {
+    console.log(err);
+  });
