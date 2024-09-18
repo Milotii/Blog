@@ -4,46 +4,87 @@ const bodyParser = require ('body-parser');
 const mongoose = require ('mongoose');
 const multer = require ('multer');
 const { v4: uuidv4 } = require('uuid');
+const { graphqlHTTP } = require ('express-graphql');
 
-const feedRoutes = require ('./routes/feed');
-const authRoutes = require ('./routes/auth');
+const graphqlSchema = require('./graphql/schema');
+const graphqlResolver = require('./graphql/resolvers');
+const auth = require('./middleware/auth');
+const { clearImage } = require ('./util/file');
 
 const app = express();
 
-const storage = multer.diskStorage({
-    destination: function(req, file, cb) {
-        cb(null, 'images');
-    },
-    filename: function(req, file, cb) {
-        cb(null, uuidv4())
-    }
+const fileStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'images');
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname); // Extract the file extension
+    cb(null, new Date().toISOString().replace(/:/g, '-') + '-' + file.originalname.split('.')[0] + ext);
+  }
 });
 
+
 const fileFilter = (req, file, cb) => {
-    if(file.mimetype === 'image/png' ||
-        file.mimetype === 'image/jpg' ||
-        file.mimetype === 'image/jpeg')
-    {
-        cb (null, true);
-    }
-    else {
-        cb(null, false);
-    }
+  if (
+    file.mimetype === 'image/png' ||
+    file.mimetype === 'image/jpg' ||
+    file.mimetype === 'image/jpeg'
+  ) {
+    cb(null, true); // Accept the file
+  } else {
+    cb(null, false); // Reject the file
+  }
 };
 
 app.use(bodyParser.json()); //application.json
-app.use(multer({storage: storage, fileFilter: fileFilter}).single('image'));
+app.use(multer({ storage: fileStorage, fileFilter: fileFilter }).single('image'));
 app.use('/images', express.static(path.join(__dirname, 'images')));
 
 app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if(req.method === 'OPTIONS') {
+      return res.sendStatus(200);
+    }
     next();
 });
 
-app.use('/feed', feedRoutes);
-app.use('/auth', authRoutes);
+app.use(auth);
+
+app.put('/post-image', (req, res, next) => {
+  if (!req.isAuth) {
+    throw new Error('Not authenticated');
+  }
+  if (!req.file) {
+    return res.status(200).json({ message: 'No file provided' });
+  }
+  if (req.body.oldPath) {
+    clearImage(req.body.oldPath);
+  }
+
+  const fixedFilePath = req.file.path.replace(/\\/g, '/'); // Fix path slashes for Windows
+
+  return res.status(201).json({ message: 'File stored', filePath: fixedFilePath });
+});
+
+
+
+app.use('/graphql', graphqlHTTP({
+  schema: graphqlSchema,
+  rootValue: graphqlResolver,
+  graphiql: true,
+  formatError(err) {
+    if(!err.originalError) {
+      return err;
+    }
+    const data = err.originalError.data;
+    const message = err.message || 'An error occurred';
+    const code = err.originalError.code || 500;
+    return { message: message, status: code, data: data }
+  }
+}));
+
 
 app.use((error, req, res, next) => {
     console.log(error);
@@ -51,19 +92,11 @@ app.use((error, req, res, next) => {
     const message = error.message; //by default
     const data = error.data;
     res.status(status).json({ message: message, data: data });
-})
+});
 
 mongoose.connect('mongodb+srv://miloti:YNgNLXIn0VLKzkUa@blog.hscf6.mongodb.net/')
   .then(result => {
-    const server = app.listen(8080, () => {
-      console.log('Server started on port 8080');
-    });
-    const io = require('./socket').init(server);
-    console.log('Socket.io initialized');  // Add this line for confirmation
-    io.on('connection', socket => {
-      console.log('Client connected');
-    });
+    app.listen(8080)  
   })
-  .catch(err => {
-    console.log(err);
-  });
+  .catch(err =>
+    console.log(err));
